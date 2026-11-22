@@ -19,6 +19,8 @@ from ..config import HaruConfig
 from .meanflow_head import MeanFlowHead
 from .vibevoice_codec import VibeVoiceCodec
 
+_PREFILL_CHUNK = 512
+
 
 class AudioProjector(nn.Module):
     """Audio latent -> LM embedding space."""
@@ -121,3 +123,37 @@ class HaruModel(nn.Module):
         than the resolution of bfloat16 at the magnitude of those logits.
         """
         return hidden.float() @ self.lm.embed_tokens.weight[tokens].float().T
+
+
+class LMStream:
+    """Language model state for one conversation."""
+
+    def __init__(self, model: HaruModel, guidance_scale: float | None = None):
+        self.model = model
+        self.guidance_scale = guidance_scale
+        self.cache: DynamicCache | None = None
+
+    def prefill(self, prompt) -> torch.Tensor:
+        """Reset the cache and return the prompt's last hidden state ``[1, H]``."""
+        model = self.model
+        self.cache = model.new_cache()
+        hidden = None
+        for s in range(0, prompt.length, _PREFILL_CHUNK):
+            span = slice(s, s + _PREFILL_CHUNK)
+            embeddings = model.embed(
+                prompt.tokens[None, span], prompt.model_latents[None, span], prompt.user_latents[None, span],
+                prompt.model_mask[None, span], prompt.user_mask[None, span],
+            )
+            hidden = model(embeddings, self.cache)[:, -1]
+        return hidden
+
+    def step(self, token: torch.Tensor, latent: torch.Tensor, user_latent: torch.Tensor) -> torch.Tensor:
+        """One frame: text token ``[1]``, raw model latent ``[1, D]`` and user latent ``[1, 1, D]`` -> ``[1, H]``."""
+        return self.model(self.model.embed(token[None], latent[None], user_latent), self.cache)[:, -1]
+
+    def logits(self, hidden: torch.Tensor) -> torch.Tensor:
+        return self.model.logits(hidden)
+
+    def latent(self, hidden: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
+        """Hidden state ``[1, H]`` and noise ``[1, D]`` -> raw audio latent ``[1, D]``."""
+        return self.model.unscale_latents(self.model.head.sample(hidden, noise, self.guidance_scale))
