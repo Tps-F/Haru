@@ -17,7 +17,7 @@ from transformers import DynamicCache, Qwen3_5TextConfig, Qwen3_5TextModel
 
 from ..config import HaruConfig
 from .meanflow_head import MeanFlowHead
-from .vibevoice_codec import VibeVoiceCodec
+from .vibevoice_codec import CODEC_BACKENDS, VibeVoiceCodec
 
 _PREFILL_CHUNK = 512
 
@@ -157,3 +157,19 @@ class LMStream:
     def latent(self, hidden: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
         """Hidden state ``[1, H]`` and noise ``[1, D]`` -> raw audio latent ``[1, D]``."""
         return self.model.unscale_latents(self.model.head.sample(hidden, noise, self.guidance_scale))
+
+
+def open_lm_stream(model: HaruModel, backend: str = "torch", guidance_scale: float | None = None) -> LMStream:
+    """In auto mode, use Triton when available for a bfloat16 model on CUDA."""
+    from .. import codec_triton
+
+    if backend not in CODEC_BACKENDS:
+        raise ValueError(f"unknown language model backend {backend!r}")
+    usable = codec_triton.is_available() and model.device.type == "cuda" and model.dtype == torch.bfloat16
+    if backend == "triton" and not usable:
+        raise RuntimeError("the Triton language model backend needs triton and a bfloat16 model on CUDA")
+    if backend != "torch" and usable:
+        from ..lm_triton import TritonLMStream
+
+        return TritonLMStream(model, guidance_scale)
+    return LMStream(model, guidance_scale)

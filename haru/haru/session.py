@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import torch
 
-from .models.haru import HaruModel, LMStream
+from .models.haru import HaruModel, open_lm_stream
 from .models.vibevoice_codec import open_stream
 from .prompt import build_prompt
 from .sampling import DryConfig, DryState, StreamDetokenizer, sample_token
@@ -41,6 +41,7 @@ class DuplexConfig:
     seed: int | None = None
     codec_backend: str = "torch"  # "torch", "triton" (faster; needs the triton package) or "auto"
     codec_num_stages: int | None = None  # pipeline depth of the Triton codec (1-3); None: the deepest that fits
+    lm_backend: str = "torch"
 
 
 @dataclass
@@ -80,7 +81,7 @@ class DuplexSession:
         self.index = 0
         self.prompt_length = 0
         self._generator = torch.Generator(device=model.device)
-        self._lm = LMStream(model, self.config.guidance_scale)
+        self._lm = open_lm_stream(model, self.config.lm_backend, self.config.guidance_scale)
         self._codec = open_stream(
             model.codec, backend=self.config.codec_backend, num_stages=self.config.codec_num_stages
         )
