@@ -47,10 +47,10 @@ def snr_db(reference: torch.Tensor, signal: torch.Tensor) -> float:
 @pytest.mark.gpu("triton")
 def test_matches_torch_stream(model, prompt):
     """Both streams see the same inputs; each keeps its own state, so rounding differences accumulate."""
-    reference, stream = LMStream(model, 1.5), open_lm_stream(model, "triton", 1.5)
+    reference, stream = LMStream(model, 2.0), open_lm_stream(model, "triton", 2.0)
     assert type(stream) is not LMStream
     assert torch.equal(reference.prefill(prompt), stream.prefill(prompt))
-    hidden_snr, latent_snr = [], []
+    hidden_snr = []
     for token, latent, user_latent, noise in inputs(model, 30):
         expected = reference.step(token, latent, user_latent)
         hidden = stream.step(token, latent, user_latent)
@@ -61,10 +61,9 @@ def test_matches_torch_stream(model, prompt):
         assert snr_db(expected_logits, logits) > 60
         sampled, expected_latent = stream.latent(expected, noise), reference.latent(expected, noise)
         assert sampled.shape == expected_latent.shape and sampled.dtype == expected_latent.dtype
-        latent_snr.append(snr_db(expected_latent, sampled))
+        assert snr_db(expected_latent, sampled) > 30
     # A bfloat16 unit is 1-2 at the magnitude of the residual stream: single frames dip when a large value flips.
     assert np.median(hidden_snr) > 25
-    assert np.median(latent_snr) > 25
 
 
 @pytest.mark.gpu("triton")
