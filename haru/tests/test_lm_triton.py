@@ -1,38 +1,18 @@
 """Triton language model backend: parity with the PyTorch ``LMStream`` on a real checkpoint
 (``HARU_MODEL=/path/to/Haru-4B pytest -m gpu tests/test_lm_triton.py``)."""
 
-import os
-
 import numpy as np
 import pytest
 import torch
 
-from haru import codec_triton
 from haru.models.haru import LMStream, open_lm_stream
 
 FRAME = 3200
 
 
-def gpu(test):
-    for mark in (
-        pytest.mark.skipif(not codec_triton.is_available(), reason="needs triton and a CUDA device"),
-        pytest.mark.skipif(not os.environ.get("HARU_MODEL"), reason="set HARU_MODEL to a checkpoint"),
-        pytest.mark.gpu,
-    ):
-        test = mark(test)
-    return test
-
-
 def test_open_lm_stream_rejects_unknown_backend():
     with pytest.raises(ValueError):
         open_lm_stream(None, backend="cuda")
-
-
-@pytest.fixture(scope="module")
-def model():
-    from haru import HaruModel
-
-    return HaruModel.from_pretrained(os.environ["HARU_MODEL"], device="cuda")
 
 
 @pytest.fixture(scope="module")
@@ -64,7 +44,7 @@ def snr_db(reference: torch.Tensor, signal: torch.Tensor) -> float:
     return float(10 * torch.log10(reference.pow(2).sum() / (reference - signal).pow(2).sum().clamp_min(1e-30)))
 
 
-@gpu
+@pytest.mark.gpu("triton")
 def test_matches_torch_stream(model, prompt):
     """Both streams see the same inputs; each keeps its own state, so rounding differences accumulate."""
     reference, stream = LMStream(model, 1.5), open_lm_stream(model, "triton", 1.5)
@@ -87,7 +67,7 @@ def test_matches_torch_stream(model, prompt):
     assert np.median(latent_snr) > 25
 
 
-@gpu
+@pytest.mark.gpu("triton")
 def test_restart_and_buffer_growth_do_not_change_the_output(model, prompt, monkeypatch):
     from haru import lm_triton
 
@@ -102,7 +82,7 @@ def test_restart_and_buffer_growth_do_not_change_the_output(model, prompt, monke
     assert all(torch.equal(a, b) for a, b in zip(first, again))
 
 
-@gpu
+@pytest.mark.gpu("triton")
 def test_session_on_triton_is_reproducible(model):
     from haru import DuplexConfig, DuplexSession
 
